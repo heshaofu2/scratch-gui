@@ -30,10 +30,32 @@ if (typeof window === 'object') {
 // 检查是否在 iframe 中
 const isEmbedded = window.parent !== window;
 
+// 允许的父页面域名，从 URL 参数或环境变量获取
+// 可通过 ?parentOrigin=https://example.com 指定
+const getAllowedOrigin = () => {
+    const urlParams = new URLSearchParams(window.location.search);
+    const parentOrigin = urlParams.get('parentOrigin');
+    if (parentOrigin) {
+        return parentOrigin;
+    }
+    // 如果在 iframe 中，尝试获取父页面的 origin（同源情况下）
+    try {
+        if (isEmbedded && window.parent.location.origin) {
+            return window.parent.location.origin;
+        }
+    } catch (e) {
+        // 跨域时无法访问，忽略
+    }
+    // 默认允许所有（开发环境），生产环境应明确指定
+    return '*';
+};
+
+const allowedOrigin = getAllowedOrigin();
+
 // 通知父页面编辑器状态
 const notifyParent = (type, data) => {
     if (isEmbedded) {
-        window.parent.postMessage({ source: 'scratch-gui', type, data }, '*');
+        window.parent.postMessage({ source: 'scratch-gui', type, data }, allowedOrigin);
     }
 };
 
@@ -42,8 +64,14 @@ let isLoadingProject = false;
 
 // VM 监听组件 - 用于在 GUI 挂载后获取 VM 引用并设置通信
 class VMListener extends React.Component {
+    constructor(props) {
+        super(props);
+        // 绑定事件处理函数，确保可以正确移除
+        this.handleParentMessage = this.handleParentMessage.bind(this);
+    }
+
     componentDidMount() {
-        this.setupMessageHandler();
+        window.addEventListener('message', this.handleParentMessage);
         this.notifyReady();
     }
 
@@ -53,17 +81,41 @@ class VMListener extends React.Component {
         }
     }
 
+    componentWillUnmount() {
+        window.removeEventListener('message', this.handleParentMessage);
+    }
+
     notifyReady() {
         if (this.props.vm) {
             notifyParent('EDITOR_READY', { ready: true });
         }
     }
 
-    setupMessageHandler() {
-        window.addEventListener('message', this.handleParentMessage.bind(this));
+    /**
+     * 清理重复的 Stage 对象
+     * 这是一个 workaround，用于处理某些情况下 VM 中出现多个 Stage 的问题
+     * TODO: 定位并修复产生重复 Stage 的根本原因
+     */
+    cleanupDuplicateStages(vm) {
+        const targets = vm.runtime.targets;
+        const stageTargets = targets.filter(t => t.isStage);
+
+        if (stageTargets.length > 1) {
+            console.warn(`[Scratch] Found ${stageTargets.length} stages, removing duplicates...`);
+            // 保留第一个 Stage，移除其他的
+            for (let i = 1; i < stageTargets.length; i++) {
+                const duplicateStage = stageTargets[i];
+                vm.runtime.targets = vm.runtime.targets.filter(t => t !== duplicateStage);
+                console.log('[Scratch] Removed duplicate stage:', duplicateStage.getName());
+            }
+        }
     }
 
     handleParentMessage(event) {
+        // 验证消息来源（如果指定了允许的 origin）
+        if (allowedOrigin !== '*' && event.origin !== allowedOrigin) {
+            return;
+        }
         if (!event.data || event.data.source !== 'scratch-parent') return;
 
         const { type, data } = event.data;
@@ -127,25 +179,7 @@ class VMListener extends React.Component {
 
             case 'SAVE_PROJECT':
                 // 保存项目为 sb3 格式
-                // 先检查并修复 targets 中的重复 Stage 问题
-                const targets = vm.runtime.targets;
-                console.log('[Scratch] Before save, targets count:', targets.length);
-                targets.forEach((t, i) => {
-                    console.log(`[Scratch]   Target ${i}: ${t.sprite?.name || t.getName()}, isStage: ${t.isStage}`);
-                });
-
-                // 查找重复的 Stage 并移除
-                const stageTargets = targets.filter(t => t.isStage);
-                if (stageTargets.length > 1) {
-                    console.warn('[Scratch] Found duplicate stages, removing extras...');
-                    // 保留第一个 Stage，移除其他的
-                    for (let i = 1; i < stageTargets.length; i++) {
-                        const duplicateStage = stageTargets[i];
-                        vm.runtime.targets = vm.runtime.targets.filter(t => t !== duplicateStage);
-                        console.log('[Scratch] Removed duplicate stage:', duplicateStage.getName());
-                    }
-                }
-
+                this.cleanupDuplicateStages(vm);
                 vm.saveProjectSb3()
                     .then(blob => {
                         const reader = new FileReader();
