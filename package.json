@@ -11,6 +11,7 @@
   },
   "main": "./dist/scratch-gui.js",
   "scripts": {
+    "postinstall": "node scripts/patch-scratch-storage.js",
     "build": "npm run clean && webpack",
     "clean": "rimraf ./build ./dist",
     "deploy": "touch build/.nojekyll && gh-pages -t -d build -m \"[skip ci] Build for $(git log --pretty=format:%H -n1)\"",

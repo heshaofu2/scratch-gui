@@ -9,7 +9,11 @@ import defaultProject from './default-project';
 class Storage extends ScratchStorage {
     constructor () {
         super();
+        // 设置默认资源主机路径（私有化部署使用本地路径）
+        this.assetHost = '/scratch/assets';
         this.cacheDefaultProject();
+        // 自动注册 web stores（私有化部署）
+        this.addOfficialScratchWebStores();
     }
     addOfficialScratchWebStores () {
         this.addWebStore(
@@ -59,7 +63,7 @@ class Storage extends ScratchStorage {
         this.assetHost = assetHost;
     }
     getAssetGetConfig (asset) {
-        return `${this.assetHost}/internalapi/asset/${asset.assetId}.${asset.dataFormat}/get/`;
+        return `${this.assetHost}/${asset.assetId}.${asset.dataFormat}`;
     }
     getAssetCreateConfig (asset) {
         return {
