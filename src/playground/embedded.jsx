@@ -160,12 +160,20 @@ class VMListener extends React.Component {
                     isLoadingProject = true;
                     vm.loadProject(projectData)
                         .then(() => {
-                            console.log('[Scratch] Project JSON parsed, waiting for assets...');
+                            // 记录初始状态
+                            const initialTargets = vm.runtime.targets || [];
+                            console.log(`[Scratch] Project JSON parsed, targets: ${initialTargets.length}, waiting for assets...`);
+                            initialTargets.forEach((t, i) => {
+                                const costumes = t.sprite?.costumes || t.costumes || [];
+                                console.log(`[Scratch]   Target ${i}: ${t.getName()}, costumes: ${costumes.length}`);
+                            });
 
-                            // 轮询检查所有 costume 的 skinId 是否已设置
+                            // 轮询检查所有 costume 的 skinId 是否已设置，且 targets 数量稳定
                             return new Promise((resolve) => {
                                 let attempts = 0;
                                 const maxAttempts = 100; // 最多等待 10 秒 (100 * 100ms)
+                                let lastTargetCount = 0;
+                                let stableCount = 0; // 连续稳定的次数
 
                                 const checkAllSkinsLoaded = () => {
                                     attempts++;
@@ -173,6 +181,14 @@ class VMListener extends React.Component {
                                     let allLoaded = true;
                                     let loadedCount = 0;
                                     let totalCount = 0;
+
+                                    // 检查 targets 数量是否稳定
+                                    if (targets.length === lastTargetCount) {
+                                        stableCount++;
+                                    } else {
+                                        stableCount = 0;
+                                        lastTargetCount = targets.length;
+                                    }
 
                                     for (const target of targets) {
                                         const costumes = target.sprite?.costumes || target.costumes || [];
@@ -187,11 +203,12 @@ class VMListener extends React.Component {
                                         }
                                     }
 
-                                    if (allLoaded && totalCount > 0) {
-                                        console.log(`[Scratch] All ${totalCount} costumes loaded`);
+                                    // 需要：所有 skinId 加载完成 且 targets 数量稳定至少 3 次
+                                    if (allLoaded && totalCount > 0 && stableCount >= 3) {
+                                        console.log(`[Scratch] All ${totalCount} costumes loaded, ${targets.length} targets stable`);
                                         resolve();
                                     } else if (attempts >= maxAttempts) {
-                                        console.warn(`[Scratch] Asset loading timeout: ${loadedCount}/${totalCount} costumes loaded`);
+                                        console.warn(`[Scratch] Asset loading timeout: ${loadedCount}/${totalCount} costumes, ${targets.length} targets`);
                                         resolve(); // 超时也继续，部分加载比完全失败好
                                     } else {
                                         // 每 100ms 检查一次
@@ -204,7 +221,12 @@ class VMListener extends React.Component {
                             });
                         })
                         .then(() => {
-                            console.log('[Scratch] Project loaded successfully');
+                            // 额外等待一帧，确保 GUI 有机会渲染
+                            return new Promise(resolve => requestAnimationFrame(resolve));
+                        })
+                        .then(() => {
+                            const finalTargets = vm.runtime.targets || [];
+                            console.log(`[Scratch] Project loaded successfully, final targets: ${finalTargets.length}`);
                             notifyParent('PROJECT_LOADED', { success: true });
                         })
                         .catch(err => {
