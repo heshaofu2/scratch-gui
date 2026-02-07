@@ -62,6 +62,9 @@ const notifyParent = (type, data) => {
 // 用于防止并发加载项目
 let isLoadingProject = false;
 
+// 记录预期的 targets ID，用于检测异常增加或减少
+let expectedTargetIds = new Set();
+
 // VM 监听组件 - 用于在 GUI 挂载后获取 VM 引用并设置通信
 class VMListener extends React.Component {
     constructor(props) {
@@ -158,14 +161,25 @@ class VMListener extends React.Component {
                     }
 
                     isLoadingProject = true;
+
+                    // 🔧 修复：加载前清理 VM 状态，防止默认项目 targets 残留
+                    // vm.clear() 会移除所有 sprites 和 stage，确保干净的加载环境
+                    try {
+                        vm.clear();
+                        console.log('[Scratch] VM cleared before loading project');
+                    } catch (clearErr) {
+                        console.warn('[Scratch] VM clear failed (may be expected on first load):', clearErr.message);
+                    }
+
                     vm.loadProject(projectData)
                         .then(() => {
-                            // 记录初始状态
+                            // 🔧 修复：记录预期的 targets ID，用于后续验证
                             const initialTargets = vm.runtime.targets || [];
-                            console.log(`[Scratch] Project JSON parsed, targets: ${initialTargets.length}, waiting for assets...`);
+                            expectedTargetIds = new Set(initialTargets.map(t => t.id));
+                            console.log(`[Scratch] Project JSON parsed, expected ${expectedTargetIds.size} targets, waiting for assets...`);
                             initialTargets.forEach((t, i) => {
                                 const costumes = t.sprite?.costumes || t.costumes || [];
-                                console.log(`[Scratch]   Target ${i}: ${t.getName()}, costumes: ${costumes.length}`);
+                                console.log(`[Scratch]   Target ${i}: ${t.getName()} (id: ${t.id}), costumes: ${costumes.length}`);
                             });
 
                             // 轮询检查所有 costume 的 skinId 是否已设置，且 targets 数量稳定
@@ -177,10 +191,41 @@ class VMListener extends React.Component {
 
                                 const checkAllSkinsLoaded = () => {
                                     attempts++;
-                                    const targets = vm.runtime.targets || [];
+                                    let targets = vm.runtime.targets || [];
                                     let allLoaded = true;
                                     let loadedCount = 0;
                                     let totalCount = 0;
+
+                                    // 🔧 修复：检测并修复 targets 异常增加（竞态条件导致的重复）
+                                    if (targets.length > expectedTargetIds.size && expectedTargetIds.size > 0) {
+                                        const unexpectedTargets = targets.filter(t => !expectedTargetIds.has(t.id));
+                                        if (unexpectedTargets.length > 0) {
+                                            console.warn(`[Scratch] Found ${unexpectedTargets.length} unexpected targets, removing...`);
+                                            unexpectedTargets.forEach(t => {
+                                                console.warn(`[Scratch]   Removing: ${t.getName()} (id: ${t.id})`);
+                                            });
+                                            vm.runtime.targets = targets.filter(t => expectedTargetIds.has(t.id));
+                                            targets = vm.runtime.targets; // 更新引用
+                                        }
+                                    }
+
+                                    // 🔧 修复：检测 targets 减少（可能是资源加载失败）
+                                    if (targets.length < expectedTargetIds.size) {
+                                        const currentIds = new Set(targets.map(t => t.id));
+                                        const missingIds = [...expectedTargetIds].filter(id => !currentIds.has(id));
+                                        if (missingIds.length > 0) {
+                                            console.warn(`[Scratch] Missing ${missingIds.length} targets! IDs: ${missingIds.join(', ')}`);
+                                            // 注意：只记录警告，无法恢复丢失的数据
+                                        }
+                                    }
+
+                                    // 🔧 修复：清理重复的 Stage
+                                    const stageTargets = targets.filter(t => t.isStage);
+                                    if (stageTargets.length > 1) {
+                                        console.warn(`[Scratch] Found ${stageTargets.length} stages, keeping first`);
+                                        vm.runtime.targets = targets.filter(t => !t.isStage || t === stageTargets[0]);
+                                        targets = vm.runtime.targets;
+                                    }
 
                                     // 检查 targets 数量是否稳定
                                     if (targets.length === lastTargetCount) {
@@ -225,8 +270,20 @@ class VMListener extends React.Component {
                             return new Promise(resolve => requestAnimationFrame(resolve));
                         })
                         .then(() => {
+                            // 🔧 修复：加载完成后立即清理，而非等到保存时
+                            this.cleanupDuplicateStages(vm);
+
                             const finalTargets = vm.runtime.targets || [];
                             console.log(`[Scratch] Project loaded successfully, final targets: ${finalTargets.length}`);
+                            finalTargets.forEach((t, i) => {
+                                console.log(`[Scratch]   Final target ${i}: ${t.getName()} (id: ${t.id}, isStage: ${t.isStage})`);
+                            });
+
+                            // 验证最终状态
+                            if (expectedTargetIds.size > 0 && finalTargets.length !== expectedTargetIds.size) {
+                                console.warn(`[Scratch] Target count mismatch: expected ${expectedTargetIds.size}, got ${finalTargets.length}`);
+                            }
+
                             notifyParent('PROJECT_LOADED', { success: true });
                         })
                         .catch(err => {
