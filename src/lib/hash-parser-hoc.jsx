@@ -38,6 +38,18 @@ const HashParserHOC = function (WrappedComponent) {
         }
         handleHashChange () {
             const hashMatch = window.location.hash.match(/#(\d+)/);
+
+            // 检查是否为编辑模式（从 URL 参数读取）
+            // 编辑模式下，前端会通过 postMessage 发送项目数据，不需要加载默认项目
+            const urlParams = new URLSearchParams(window.location.search);
+            const isEditMode = urlParams.get('mode') === 'edit';
+
+            if (isEditMode && hashMatch === null) {
+                // 编辑模式且没有 hash 项目 ID：不设置默认项目，等待 LOAD_PROJECT
+                console.log('[Scratch] Edit mode: skipping default project, waiting for LOAD_PROJECT');
+                return; // 不调用 setProjectId，阻止默认项目加载
+            }
+
             const hashProjectId = hashMatch === null ? defaultProjectId : hashMatch[1];
             this.props.setProjectId(hashProjectId.toString());
         }

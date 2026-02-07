@@ -397,6 +397,9 @@ if (supportedBrowser()) {
     // 解析 URL 参数
     const urlParams = new URLSearchParams(window.location.search);
     const isPlayerOnly = urlParams.get('player') === 'true';
+    const editorMode = urlParams.get('mode') || 'new';
+
+    console.log(`[Scratch] Editor initializing with mode: ${editorMode}`);
 
     ReactDOM.render(
         <WrappedEmbeddedGui
