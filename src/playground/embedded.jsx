@@ -160,6 +160,50 @@ class VMListener extends React.Component {
                     isLoadingProject = true;
                     vm.loadProject(projectData)
                         .then(() => {
+                            console.log('[Scratch] Project JSON parsed, waiting for assets...');
+
+                            // 轮询检查所有 costume 的 skinId 是否已设置
+                            return new Promise((resolve) => {
+                                let attempts = 0;
+                                const maxAttempts = 100; // 最多等待 10 秒 (100 * 100ms)
+
+                                const checkAllSkinsLoaded = () => {
+                                    attempts++;
+                                    const targets = vm.runtime.targets || [];
+                                    let allLoaded = true;
+                                    let loadedCount = 0;
+                                    let totalCount = 0;
+
+                                    for (const target of targets) {
+                                        const costumes = target.sprite?.costumes || target.costumes || [];
+                                        for (const costume of costumes) {
+                                            totalCount++;
+                                            // skinId 是数字类型，加载完成后才设置
+                                            if (typeof costume.skinId === 'number') {
+                                                loadedCount++;
+                                            } else {
+                                                allLoaded = false;
+                                            }
+                                        }
+                                    }
+
+                                    if (allLoaded && totalCount > 0) {
+                                        console.log(`[Scratch] All ${totalCount} costumes loaded`);
+                                        resolve();
+                                    } else if (attempts >= maxAttempts) {
+                                        console.warn(`[Scratch] Asset loading timeout: ${loadedCount}/${totalCount} costumes loaded`);
+                                        resolve(); // 超时也继续，部分加载比完全失败好
+                                    } else {
+                                        // 每 100ms 检查一次
+                                        setTimeout(checkAllSkinsLoaded, 100);
+                                    }
+                                };
+
+                                // 给一个初始延迟让加载开始
+                                setTimeout(checkAllSkinsLoaded, 50);
+                            });
+                        })
+                        .then(() => {
                             console.log('[Scratch] Project loaded successfully');
                             notifyParent('PROJECT_LOADED', { success: true });
                         })
